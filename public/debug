@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { background: #ff0000; width: 100%; height: 100%; }
+    #app {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      bottom: 0;
+      background: #111;
+      color: #fff;
+      font-family: monospace;
+      font-size: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 20px;
+    }
+    /* Se c'è nero fuori da #app, significa che fixed inset:0 non copre tutto */
+    .val { color: #0f0; font-size: 20px; font-weight: bold; }
+    .label { color: #aaa; font-size: 12px; }
+    .row { text-align: center; }
+    /* Banda BLU = safe-area-inset-bottom reale */
+    #sab-band {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      height: env(safe-area-inset-bottom, 0px);
+      background: rgba(0,120,255,0.6);
+      pointer-events: none;
+      z-index: 999;
+    }
+    /* Banda ROSSA = top */
+    #sat-band {
+      position: fixed; top: 0; left: 0; right: 0;
+      height: env(safe-area-inset-top, 0px);
+      background: rgba(255,0,0,0.6);
+      pointer-events: none;
+      z-index: 999;
+    }
+  </style>
+</head>
+<body>
+  <div id="sat-band"></div>
+  <div id="sab-band"></div>
+  <div id="app">
+    <div class="row"><div class="label">window.innerHeight</div><div class="val" id="wh"></div></div>
+    <div class="row"><div class="label">screen.height</div><div class="val" id="sh"></div></div>
+    <div class="row"><div class="label">clientHeight</div><div class="val" id="ch"></div></div>
+    <div class="row"><div class="label">safe-area-inset-top</div><div class="val" id="sat"></div></div>
+    <div class="row"><div class="label">safe-area-inset-bottom</div><div class="val" id="sab"></div></div>
+    <div class="row"><div class="label">standalone (PWA)</div><div class="val" id="sa"></div></div>
+    <div class="row"><div class="label">differenza screen-inner</div><div class="val" id="diff"></div></div>
+  </div>
+  <script>
+    const wh = window.innerHeight;
+    const sh = screen.height;
+    document.getElementById('wh').textContent = wh + 'px';
+    document.getElementById('sh').textContent = sh + 'px';
+    document.getElementById('ch').textContent = document.documentElement.clientHeight + 'px';
+    document.getElementById('sa').textContent = window.navigator.standalone ? 'SI ✓' : 'NO ✗';
+    document.getElementById('diff').textContent = (sh - wh) + 'px';
+
+```
+const el = document.createElement('div');
+el.style.paddingTop = 'env(safe-area-inset-top)';
+el.style.paddingBottom = 'env(safe-area-inset-bottom)';
+document.body.appendChild(el);
+const cs = getComputedStyle(el);
+document.getElementById('sat').textContent = cs.paddingTop;
+document.getElementById('sab').textContent = cs.paddingBottom;
+el.remove();
+```
+
+  </script>
+</body>
+</html>
