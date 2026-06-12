@@ -3413,22 +3413,24 @@ const AIView = ({ C, trades, equity, settings, activeAccount, currentTab, setAiT
       data_ora: new Date().toLocaleString('it-IT'),
       valuta_base: currency,
       portfolio: {
-        valore_totale_usd: totalValue.toFixed(2),
-        pnl_24h_usd: totalPnl24h.toFixed(2),
-        pnl_24h_pct: ((totalPnl24h/totalValue)*100).toFixed(2),
+        valore_totale_usd: (totalValue||0).toFixed(2),
+        pnl_24h_usd: (totalPnl24h||0).toFixed(2),
+        pnl_24h_pct: (totalValue>0 ? (totalPnl24h/totalValue)*100 : 0).toFixed(2),
         stablecoin_usd: stableValue,
         stablecoin_pct: stablePct,
         wallet_collegati: wallets.length,
         exchange_collegati: exchanges.length,
       },
-      asset: aiAssets.map(a => ({
+      asset: (aiAssets||[]).map(a => ({
         simbolo: a.symbol, nome: a.name, quantita: a.amount,
-        prezzo_usd: a.price, valore_usd: a.value.toFixed(2),
-        variazione_24h_pct: a.chg24h, allocazione_pct: a.alloc, tipo: a.type,
+        prezzo_usd: a.price, valore_usd: (a.value||0).toFixed(2),
+        variazione_24h_pct: a.chg24h||0,
+        allocazione_pct: (a.allocPct!=null ? a.allocPct : a.alloc||0),
+        rete: a.network||null, tipo: a.type,
       })),
       target_rebalance: rebalanceTargets,
     };
-  }, [settings]);
+  }, [settings, STORE]);
 
   const send = async () => {
     const text = input.trim();
