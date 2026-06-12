@@ -1334,38 +1334,52 @@ const MOCK_STORE = (() => {
 const PortfolioCtx = React.createContext(null);
 const usePortfolio = () => React.useContext(PortfolioCtx) || MOCK_STORE;
 const evmAddrs = (wallets) => (wallets||[]).map(w=>(w.address||'').trim()).filter(a=>/^0x[a-fA-F0-9]{40}$/.test(a));
-function PortfolioProvider({ wallets, children }){
+const exchangeAccounts = (exchanges) => (exchanges||[]).filter(e=>e && e.apiKey && e.apiSecret)
+  .map(e=>({ exchangeId:e.exchangeId, apiKey:e.apiKey, apiSecret:e.apiSecret, name:e.name||e.exchangeId }));
+function PortfolioProvider({ wallets, exchanges, children }){
   const [store, setStore] = React.useState(MOCK_STORE);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
-  const addrKey = JSON.stringify(evmAddrs(wallets));
+  const addrs = evmAddrs(wallets);
+  const accts = exchangeAccounts(exchanges);
+  const depKey = JSON.stringify([addrs, accts.map(a=>a.exchangeId+':'+a.apiKey)]);
   const reload = React.useCallback(() => {
-    const addrs = evmAddrs(wallets);
-    if (addrs.length === 0){ setStore(MOCK_STORE); setError(null); return; }
+    if (addrs.length === 0 && accts.length === 0){ setStore(MOCK_STORE); setError(null); return; }
     setLoading(true); setError(null);
-    fetch('/api/wallet', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ addresses: addrs }) })
-      .then(r=>r.json())
-      .then(j=>{
-        if(!j.ok){ setError(j.error||'Errore lettura wallet'); setStore(MOCK_STORE); return; }
-        const assets = (j.assets||[]).map(a=>({ ...a, price24h: a.price, mcap:0, allocPct: a.allocPct||0 }));
-        const totalValue = j.totalValue||0;
-        const onChainValue = j.onChainValue!=null ? j.onChainValue : totalValue;
-        setStore({
-          ...MOCK_STORE,
-          assets, totalValue,
-          totalPnl24h: j.totalPnl24h||0,
-          totalPnl24hPct: totalValue>0 ? ((j.totalPnl24h||0)/totalValue)*100 : 0,
-          onChainValue, exchValue: j.exchValue||0,
-          comp: { ...MOCK_STORE.comp,
-            onChainPct: totalValue>0 ? +((onChainValue/totalValue)*100).toFixed(1) : 0,
-            cexPct:     totalValue>0 ? +(((totalValue-onChainValue)/totalValue)*100).toFixed(1) : 0,
-            herfindahl: totalValue>0 ? +assets.reduce((s,a)=>s+Math.pow(a.value/totalValue,2),0).toFixed(3) : 0,
-          },
-        });
-      })
-      .catch(e=>{ setError(String(e.message||e)); setStore(MOCK_STORE); })
-      .finally(()=>setLoading(false));
-  }, [addrKey]);
+    const pOnchain = addrs.length
+      ? fetch('/api/wallet', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ addresses: addrs }) }).then(r=>r.json()).catch(e=>({ok:false,error:String(e)}))
+      : Promise.resolve({ ok:true, assets:[], totalValue:0 });
+    const pExch = accts.length
+      ? fetch('/api/exchange', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ accounts: accts }) }).then(r=>r.json()).catch(e=>({ok:false,error:String(e)}))
+      : Promise.resolve({ ok:true, assets:[], totalValue:0 });
+    Promise.all([pOnchain, pExch]).then(([w, x])=>{
+      const errs = [];
+      if(!w.ok) errs.push('Wallet: '+(w.error||'errore'));
+      if(!x.ok) errs.push('Exchange: '+(x.error||'errore'));
+      const onAssets = (w.assets||[]).map(a=>({ ...a, type:'wallet' }));
+      const exAssets = (x.assets||[]).map(a=>({ ...a, type:'exchange' }));
+      // fondo per simbolo, tenendo separati on-chain e CEX nelle quote
+      const all = [...onAssets, ...exAssets];
+      const onChainValue = onAssets.reduce((s,a)=>s+(a.value||0),0);
+      const exchValue     = exAssets.reduce((s,a)=>s+(a.value||0),0);
+      const totalValue    = onChainValue + exchValue;
+      const assets = all.map(a=>({ ...a, price24h:a.price, mcap:a.mcap||0, allocPct: totalValue>0?((a.value||0)/totalValue)*100:0 }))
+                        .sort((p,q)=>(q.value||0)-(p.value||0));
+      setStore({
+        ...MOCK_STORE,
+        assets, totalValue,
+        totalPnl24h: 0,
+        totalPnl24hPct: 0,
+        onChainValue, exchValue,
+        comp: { ...MOCK_STORE.comp,
+          onChainPct: totalValue>0 ? +((onChainValue/totalValue)*100).toFixed(1) : 0,
+          cexPct:     totalValue>0 ? +((exchValue/totalValue)*100).toFixed(1) : 0,
+          herfindahl: totalValue>0 ? +assets.reduce((s,a)=>s+Math.pow((a.value||0)/totalValue,2),0).toFixed(3) : 0,
+        },
+      });
+      setError(errs.length ? errs.join(' · ') : null);
+    }).finally(()=>setLoading(false));
+  }, [depKey]);
   React.useEffect(()=>{ reload(); }, [reload]);
   return <PortfolioCtx.Provider value={{ ...store, loading, error, reload }}>{children}</PortfolioCtx.Provider>;
 }
@@ -4523,7 +4537,7 @@ export default function TradingApp() {
   const timeStr = now.toLocaleTimeString('it-IT', { hour:'2-digit', minute:'2-digit' });
 
   return (
-    <PortfolioProvider wallets={settings.wallets}>
+    <PortfolioProvider wallets={settings.wallets} exchanges={settings.exchanges}>
     <div className="relative" onClick={()=>portfolioDropOpen&&setPortfolioDropOpen(false)} style={{
       background: C.bg, color: C.primary, fontFamily: FONT.text,
       WebkitFontSmoothing: 'antialiased', MozOsxFontSmoothing: 'grayscale',
