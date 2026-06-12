@@ -1330,6 +1330,47 @@ const MOCK_STORE = (() => {
 })();
 /* ============================================================ */
 
+/* ===== PORTFOLIO ON-CHAIN — store live dai wallet (Alchemy) ===== */
+const PortfolioCtx = React.createContext(null);
+const usePortfolio = () => React.useContext(PortfolioCtx) || MOCK_STORE;
+const evmAddrs = (wallets) => (wallets||[]).map(w=>(w.address||'').trim()).filter(a=>/^0x[a-fA-F0-9]{40}$/.test(a));
+function PortfolioProvider({ wallets, children }){
+  const [store, setStore] = React.useState(MOCK_STORE);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const addrKey = JSON.stringify(evmAddrs(wallets));
+  const reload = React.useCallback(() => {
+    const addrs = evmAddrs(wallets);
+    if (addrs.length === 0){ setStore(MOCK_STORE); setError(null); return; }
+    setLoading(true); setError(null);
+    fetch('/api/wallet', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ addresses: addrs }) })
+      .then(r=>r.json())
+      .then(j=>{
+        if(!j.ok){ setError(j.error||'Errore lettura wallet'); setStore(MOCK_STORE); return; }
+        const assets = (j.assets||[]).map(a=>({ ...a, price24h: a.price, mcap:0, allocPct: a.allocPct||0 }));
+        const totalValue = j.totalValue||0;
+        const onChainValue = j.onChainValue!=null ? j.onChainValue : totalValue;
+        setStore({
+          ...MOCK_STORE,
+          assets, totalValue,
+          totalPnl24h: j.totalPnl24h||0,
+          totalPnl24hPct: totalValue>0 ? ((j.totalPnl24h||0)/totalValue)*100 : 0,
+          onChainValue, exchValue: j.exchValue||0,
+          comp: { ...MOCK_STORE.comp,
+            onChainPct: totalValue>0 ? +((onChainValue/totalValue)*100).toFixed(1) : 0,
+            cexPct:     totalValue>0 ? +(((totalValue-onChainValue)/totalValue)*100).toFixed(1) : 0,
+            herfindahl: totalValue>0 ? +assets.reduce((s,a)=>s+Math.pow(a.value/totalValue,2),0).toFixed(3) : 0,
+          },
+        });
+      })
+      .catch(e=>{ setError(String(e.message||e)); setStore(MOCK_STORE); })
+      .finally(()=>setLoading(false));
+  }, [addrKey]);
+  React.useEffect(()=>{ reload(); }, [reload]);
+  return <PortfolioCtx.Provider value={{ ...store, loading, error, reload }}>{children}</PortfolioCtx.Provider>;
+}
+/* ============================================================ */
+
 const FONT = {
   display: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif',
   text:    '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif',
@@ -1527,7 +1568,8 @@ const GoalRow = ({ C, label, balanceInit, currentPnl, targetPct, color, editing,
 };
 
 const GoalTracker = ({ C }) => {
-  const _gc = MOCK_STORE.equityCurve;
+  const STORE = usePortfolio();
+  const _gc = STORE.equityCurve;
   const balanceInit = _gc[0]?.value || 0;
   const currentPnl  = (_gc[_gc.length-1]?.value ?? balanceInit) - balanceInit;
 
@@ -1624,6 +1666,7 @@ const SettingsSectionTitle = ({ children }) => (
 );
 
 const SettingsModal = ({C,open,onClose,settings,setSettings,scheme,schemeOverride,setSchemeOverride}) => {
+  const STORE = usePortfolio();
   const [nwName,setNwName]=useState('');
   const [nwAddr,setNwAddr]=useState('');
   const [nwChain,setNwChain]=useState('ETH');
@@ -1707,7 +1750,7 @@ const SettingsModal = ({C,open,onClose,settings,setSettings,scheme,schemeOverrid
         <SettingsSectionTitle>Export</SettingsSectionTitle>
         <div style={{background:C.glass2,borderRadius:14,padding:'2px 14px'}}>
           <SettingsRow C={C} label="Export CSV portfolio" sub="Asset, prezzi e allocazioni">
-            <button onClick={()=>{const now=new Date().toISOString();const rows=[['Data','Tipo','Nome','Simbolo','Quantità','Prezzo USD','Valore USD','% Portfolio','Fonte']];const csvA=MOCK_STORE.assets;const tot=MOCK_STORE.totalValue;csvA.forEach(a=>{rows.push([now.slice(0,10),a.type==='wallet'?'DEX':'CEX',a.name,a.symbol,a.amount.toFixed(6),a.price.toFixed(4),a.value.toFixed(2),tot>0?((a.value/tot)*100).toFixed(2)+'%':'0%',a.exchange||(a.type==='wallet'?'Wallet':'Exchange')]);});const csv=rows.map(r=>r.join(',')).join('\n');const blob=new Blob([csv],{type:'text/csv'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`cryptofolio-${now.slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url);haptic.success();}} style={{padding:'6px 14px',fontSize:12,fontFamily:FONT.text,fontWeight:600,color:C.bg,background:C.green,border:'none',borderRadius:RADIUS.pill,cursor:'pointer'}}>CSV</button>
+            <button onClick={()=>{const now=new Date().toISOString();const rows=[['Data','Tipo','Nome','Simbolo','Quantità','Prezzo USD','Valore USD','% Portfolio','Fonte']];const csvA=STORE.assets;const tot=STORE.totalValue;csvA.forEach(a=>{rows.push([now.slice(0,10),a.type==='wallet'?'DEX':'CEX',a.name,a.symbol,a.amount.toFixed(6),a.price.toFixed(4),a.value.toFixed(2),tot>0?((a.value/tot)*100).toFixed(2)+'%':'0%',a.exchange||(a.type==='wallet'?'Wallet':'Exchange')]);});const csv=rows.map(r=>r.join(',')).join('\n');const blob=new Blob([csv],{type:'text/csv'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`cryptofolio-${now.slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url);haptic.success();}} style={{padding:'6px 14px',fontSize:12,fontFamily:FONT.text,fontWeight:600,color:C.bg,background:C.green,border:'none',borderRadius:RADIUS.pill,cursor:'pointer'}}>CSV</button>
           </SettingsRow>
         </div>
         {/* Backup */}
@@ -2545,6 +2588,7 @@ const DailyView = ({C,now,settings,trades,equity,activePortfolio,portfolioList})
   <PortfolioView C={C} now={now} settings={settings} activePortfolio={activePortfolio} portfolioList={portfolioList}/>;
 
 const PortfolioView = ({C, now, settings, activePortfolio, portfolioList}) => {
+  const STORE = usePortfolio();
   const [timeFilter, setTimeFilter] = usePersistedState('xt_port_tf','7D');
   const [assetExpanded, setAssetExpanded] = useState(null);
   const currency = settings?.currency || 'USD';
@@ -2553,7 +2597,7 @@ const PortfolioView = ({C, now, settings, activePortfolio, portfolioList}) => {
   const exchanges = settings?.exchanges || [];
 
   // ── MOCK_STORE ──
-  const allAssets = MOCK_STORE.assets;
+  const allAssets = STORE.assets;
   const assets = useMemo(()=>{
     if(activePortfolio==='total') return allAssets;
     const port=(portfolioList||[]).find(p=>p.id===activePortfolio);
@@ -2566,11 +2610,11 @@ const PortfolioView = ({C, now, settings, activePortfolio, portfolioList}) => {
   const pnl24h    = totalValue - totalValue24h;
   const pnl24hPct = totalValue24h>0?(pnl24h/totalValue24h)*100:0;
   const isPos     = pnl24h>=0;
-  const snapshotValue = MOCK_STORE.equityCurve[0]?.value || 0;
+  const snapshotValue = STORE.equityCurve[0]?.value || 0;
   const totalROI  = snapshotValue>0?((totalValue-snapshotValue)/snapshotValue)*100:0;
   const onChainVal = useMemo(()=>assets.filter(a=>a.type==='wallet').reduce((s,a)=>s+a.value,0),[assets]);
   const exchVal    = totalValue - onChainVal;
-  const equityCurve = MOCK_STORE.equityCurve;
+  const equityCurve = STORE.equityCurve;
 
   const allocations = useMemo(()=>assets.map(a=>({
     ...a,
@@ -2599,6 +2643,12 @@ const PortfolioView = ({C, now, settings, activePortfolio, portfolioList}) => {
 
   return (
     <div className="space-y-4">
+      {STORE.loading && (
+        <div style={{textAlign:'center',color:C.cyan,fontSize:12,fontFamily:FONT.text,padding:'6px 0'}}>Lettura saldi on-chain…</div>
+      )}
+      {STORE.error && (
+        <div style={{textAlign:'center',color:C.red,fontSize:11,fontFamily:FONT.mono,padding:'6px 10px',background:`${C.red}12`,border:`0.5px solid ${C.red}35`,borderRadius:12}}>Wallet: {STORE.error}</div>
+      )}
       {/* CARD PRINCIPALE */}
       <Glass C={C} padding="p-6">
         <div className="flex items-center justify-between mb-3">
@@ -3129,12 +3179,13 @@ const TemporalView = ({C,trades,equity,activePortfolio,portfolioList}) =>
   <StoricoView C={C} activePortfolio={activePortfolio} portfolioList={portfolioList}/>;
 
 const StoricoView = ({C,activePortfolio,portfolioList}) => {
+  const STORE = usePortfolio();
   const [timeFilter,setTimeFilter]=usePersistedState('xt_stor_tf','30D');
   const [typeFilter,setTypeFilter]=usePersistedState('xt_stor_type','Tutti');
   const [expanded,setExpanded]=useState(null);
 
-  const equitySnap = MOCK_STORE.equityCurve;
-  const TX = MOCK_STORE.transactions;
+  const equitySnap = STORE.equityCurve;
+  const TX = STORE.transactions;
   const txFiltered = typeFilter==='Tutti'?TX:TX.filter(t=>t.type===typeFilter);
 
   const totalIn  = TX.filter(t=>t.type==='Deposito').reduce((s,t)=>s+t.amount,0);
@@ -3314,6 +3365,7 @@ class ErrorBoundary extends React.Component {
 
 /* ============= AI VIEW — Chat con Gemini ============= */
 const AIView = ({ C, trades, equity, settings, activeAccount, currentTab, setAiThinking, setInputFocused }) => {
+  const STORE = usePortfolio();
   const [messages, setMessagesRaw] = React.useState(() => {
     try { return JSON.parse(localStorage.getItem('xt_ai_messages')||'[]'); } catch { return []; }
   });
@@ -3336,9 +3388,9 @@ const AIView = ({ C, trades, equity, settings, activeAccount, currentTab, setAiT
     const wallets  = settings?.wallets   || [];
     const exchanges= settings?.exchanges || [];
     const currency = settings?.currency  || 'USD';
-    const aiAssets = MOCK_STORE.assets;
-    const totalValue  = MOCK_STORE.totalValue;
-    const totalPnl24h = MOCK_STORE.totalPnl24h;
+    const aiAssets = STORE.assets;
+    const totalValue  = STORE.totalValue;
+    const totalPnl24h = STORE.totalPnl24h;
     const stableValue = 0;
     const stablePct   = '0.0';
     let rebalanceTargets = {};
@@ -3597,10 +3649,11 @@ const AIView = ({ C, trades, equity, settings, activeAccount, currentTab, setAiT
 
 /* ============= MERCATO VIEW ============= */
 const MercatoView = ({C, settings}) => {
+  const STORE = usePortfolio();
   const currency=settings?.currency||'USD';
   const currSym=currency==='EUR'?'€':currency==='BTC'?'₿':'$';
-  const GLOBAL       = MOCK_STORE.globalPrices;
-  const PORT         = MOCK_STORE.portfolioPrices;
+  const GLOBAL       = STORE.globalPrices;
+  const PORT         = STORE.portfolioPrices;
   const ALL_PRICES   = [...GLOBAL,...PORT];
   const BTC_DOM=0, TOTAL_MCAP=0, FNG={value:0,label:'—',color:C.tertiary};
   const ETH_BTC=GLOBAL.length>1?(GLOBAL[1].price/GLOBAL[0].price).toFixed(5):'—';
@@ -3716,9 +3769,10 @@ const MercatoView = ({C, settings}) => {
 /* ============= STATS ROOT VIEW ============= */
 const MetricheView = ({C,trades}) => <StatsRootView C={C}/>;
 const StatsRootView = ({C}) => {
+  const STORE = usePortfolio();
   const [section,setSection]=usePersistedState('xt_stats_sec','Performance');
   const SECTIONS=['Performance','Rischio','Composizione','Rebalance'];
-  const perf=MOCK_STORE.perf, risk=MOCK_STORE.risk, comp=MOCK_STORE.comp;
+  const perf=STORE.perf, risk=STORE.risk, comp=STORE.comp;
   const fmt=(v,d=1)=>isFinite(v)?v.toFixed(d):'—';
   const fmtUsd=v=>`$${Math.abs(v).toLocaleString('en-US',{maximumFractionDigits:0})}`;
   return (
@@ -3878,12 +3932,13 @@ const StatsRootView = ({C}) => {
 
 /* ============= REBALANCE VIEW ============= */
 const RebalanceView = ({C}) => {
-  const [targets,setTargets]=usePersistedState('xt_rb_targets',MOCK_STORE.rebalanceTargets);
+  const STORE = usePortfolio();
+  const [targets,setTargets]=usePersistedState('xt_rb_targets',STORE.rebalanceTargets);
   const [rebalanceLog,setRebalanceLog]=usePersistedState('xt_rb_log',[]);
   const [editingTarget,setEditingTarget]=useState(null);
   const [editVal,setEditVal]=useState('');
-  const CURRENT=MOCK_STORE.assets;
-  const totalValue=MOCK_STORE.totalValue;
+  const CURRENT=STORE.assets;
+  const totalValue=STORE.totalValue;
   const assets=CURRENT.map(a=>{
     const target=targets[a.symbol]??0;
     const actualPct=totalValue>0?(a.value/totalValue)*100:0;
@@ -4468,6 +4523,7 @@ export default function TradingApp() {
   const timeStr = now.toLocaleTimeString('it-IT', { hour:'2-digit', minute:'2-digit' });
 
   return (
+    <PortfolioProvider wallets={settings.wallets}>
     <div className="relative" onClick={()=>portfolioDropOpen&&setPortfolioDropOpen(false)} style={{
       background: C.bg, color: C.primary, fontFamily: FONT.text,
       WebkitFontSmoothing: 'antialiased', MozOsxFontSmoothing: 'grayscale',
@@ -4644,5 +4700,6 @@ export default function TradingApp() {
         </div>
       </div>
     </div>
+    </PortfolioProvider>
   );
 }
