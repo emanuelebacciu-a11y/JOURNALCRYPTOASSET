@@ -2,22 +2,31 @@
 // con prezzi completati da CoinGecko per i token che Alchemy non quota, e
 // filtro anti-spam per i token-truffa. Sola lettura. Key in env ALCHEMY_API_KEY.
 
-const NETWORKS = ['eth-mainnet','polygon-mainnet','arb-mainnet','base-mainnet','opt-mainnet'];
+const NETWORKS = ['eth-mainnet','polygon-mainnet','arb-mainnet','base-mainnet','opt-mainnet','bnb-mainnet','avax-mainnet'];
 // Alchemy nell'output usa alias diversi (es. matic-mainnet): mappo entrambi.
 const NET_LABEL = {
   'eth-mainnet':'Ethereum','polygon-mainnet':'Polygon','matic-mainnet':'Polygon',
   'arb-mainnet':'Arbitrum','arbitrum-mainnet':'Arbitrum','base-mainnet':'Base',
   'opt-mainnet':'Optimism','optimism-mainnet':'Optimism',
+  'bnb-mainnet':'BNB Chain','bsc-mainnet':'BNB Chain','avax-mainnet':'Avalanche','avalanche-mainnet':'Avalanche',
 };
 const NATIVE_SYM = {
   'eth-mainnet':'ETH','polygon-mainnet':'POL','matic-mainnet':'POL',
   'arb-mainnet':'ETH','arbitrum-mainnet':'ETH','base-mainnet':'ETH',
   'opt-mainnet':'ETH','optimism-mainnet':'ETH',
+  'bnb-mainnet':'BNB','bsc-mainnet':'BNB','avax-mainnet':'AVAX','avalanche-mainnet':'AVAX',
 };
 const LLAMA_CHAIN = {
   'eth-mainnet':'ethereum','polygon-mainnet':'polygon','matic-mainnet':'polygon',
   'arb-mainnet':'arbitrum','arbitrum-mainnet':'arbitrum','base-mainnet':'base',
   'opt-mainnet':'optimism','optimism-mainnet':'optimism',
+  'bnb-mainnet':'bsc','bsc-mainnet':'bsc','avax-mainnet':'avax','avalanche-mainnet':'avax',
+};
+// chainId numerici per la Price API di MetaMask
+const MM_CHAIN = {
+  'eth-mainnet':1,'polygon-mainnet':137,'matic-mainnet':137,'arb-mainnet':42161,
+  'arbitrum-mainnet':42161,'base-mainnet':8453,'opt-mainnet':10,'optimism-mainnet':10,
+  'bnb-mainnet':56,'bsc-mainnet':56,'avax-mainnet':43114,'avalanche-mainnet':43114,
 };
 
 function hexToFloat(hex, decimals){
@@ -50,6 +59,29 @@ async function alchemyTokens(key, address){
 
 // CoinGecko: prezzi per contract mancanti, una chiamata per piattaforma.
 const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+// Price API ufficiale di MetaMask: stessi prezzi che usa l'app. Batch per chainId.
+async function metamaskPrices(byChainId){
+  const out = {};
+  for(const [chainId, contracts] of Object.entries(byChainId)){
+    const uniq = [...new Set(contracts.map(c=>c.toLowerCase()))];
+    if(uniq.length===0) continue;
+    for(let i=0;i<uniq.length;i+=50){
+      const batch = uniq.slice(i,i+50);
+      const url = `https://price.api.cx.metamask.io/v2/chains/${chainId}/spot-prices?tokenAddresses=${batch.join(',')}&vsCurrency=usd`;
+      try{
+        const r = await fetch(url, { headers:{'accept':'application/json'} });
+        if(!r.ok) continue;
+        const j = await r.json();
+        for(const [addr,obj] of Object.entries(j)){
+          const p = obj && (obj.usd!=null ? obj.usd : obj.price);
+          if(p!=null) out[`${chainId}:${addr.toLowerCase()}`] = Number(p);
+        }
+      }catch(_){}
+      await sleep(120);
+    }
+  }
+  return out;
+}
 // DefiLlama: prezzi by-contract, multi-chain, gratis e senza key.
 // Una sola chiamata per tutti i token mancanti (chiavi "chain:address").
 async function llamaPrices(keys){
@@ -98,7 +130,7 @@ export default async function handler(req, res){
 
     // 2) primo passaggio: filtro spam, calcolo amount/price-noto
     const items = [];
-    const missingKeys = [];
+    const mmByChain = {};
     for(const t of raw){
       const meta = t.tokenMetadata || {};
       const isNative = !t.tokenAddress;
@@ -109,24 +141,31 @@ export default async function handler(req, res){
       const name   = isNative ? (NET_LABEL[t.network]||symbol) : (meta.name||symbol);
       if(!isNative && isSpam(name, symbol)) continue;     // scarto i token-truffa
       const po = Array.isArray(t.tokenPrices) ? (t.tokenPrices.find(p=>p.currency==='usd')||t.tokenPrices[0]) : null;
-      let price = po ? Number(po.value) : 0;
-      const it = { isNative, symbol, name, amount, price,
+      const alchemyPrice = po ? Number(po.value) : 0;
+      const it = { isNative, symbol, name, amount, price: isNative ? alchemyPrice : 0,
         network: NET_LABEL[t.network]||t.network, logo: meta.logo||null,
-        contract: t.tokenAddress||null, _net: t.network };
-      if(!isNative && (!price || price===0)){            // prezzo mancante → lo chiederò a DefiLlama
+        contract: t.tokenAddress||null, _net: t.network, _alchemyPrice: alchemyPrice };
+      if(!isNative){
+        const cid = MM_CHAIN[t.network];
+        if(cid!=null){ it._mmKey = `${cid}:${t.tokenAddress.toLowerCase()}`; (mmByChain[cid]=mmByChain[cid]||[]).push(t.tokenAddress); }
         const ch = LLAMA_CHAIN[t.network];
-        if(ch){ it._llamaKey = `${ch}:${t.tokenAddress.toLowerCase()}`; missingKeys.push(it._llamaKey); }
+        if(ch){ it._llamaKey = `${ch}:${t.tokenAddress.toLowerCase()}`; }
       }
       items.push(it);
     }
 
-    // 3) completo i prezzi mancanti con DefiLlama (una chiamata)
-    const llama = await llamaPrices(missingKeys);
+    // 3) prezzi: MetaMask (primario) → DefiLlama (fallback) → Alchemy (ultima spiaggia)
+    const mm = await metamaskPrices(mmByChain);
     for(const it of items){
-      if((!it.price || it.price===0) && it._llamaKey){
-        const p = llama[it._llamaKey];
-        if(p!=null) it.price = p;
-      }
+      if(it.isNative) continue;
+      if(it._mmKey && mm[it._mmKey]!=null){ it.price = mm[it._mmKey]; continue; }
+    }
+    const stillMissing = items.filter(it=>!it.isNative && (!it.price||it.price===0) && it._llamaKey).map(it=>it._llamaKey);
+    const llama = await llamaPrices(stillMissing);
+    for(const it of items){
+      if(it.isNative || (it.price && it.price>0)) continue;
+      if(it._llamaKey && llama[it._llamaKey]!=null){ it.price = llama[it._llamaKey]; continue; }
+      if(it._alchemyPrice && it._alchemyPrice>0){ it.price = it._alchemyPrice; }
     }
 
     // 4) valore + scarto polvere/illegittimi
