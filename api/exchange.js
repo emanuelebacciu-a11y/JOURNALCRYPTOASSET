@@ -92,7 +92,7 @@ export default async function handler(req, res){
       return { id:s.toLowerCase(), symbol:s, name:s, amount, price, value:amount*price,
         price24h:price, chg24h:0, chg7d:0, mcap:0, type:'exchange',
         exchange:bySymbol[s].exchange, network:bySymbol[s].exchange, logo:null, contract:null };
-    }).filter(a=>a.value>=0.01 || a.price===0).sort((x,y)=>y.value-x.value);
+    }).filter(a=>a.value>=0.001 || a.price===0).sort((x,y)=>y.value-x.value);
     const totalValue = assets.reduce((s,a)=>s+a.value,0);
     assets = assets.map(a=>({...a, allocPct: totalValue>0?(a.value/totalValue)*100:0}));
     res.status(200).json({ ok:true, updated:new Date().toISOString(), assets, totalValue, exchValue:totalValue });
